@@ -1,0 +1,1323 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Мониторинг — Киев</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+  body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; -webkit-text-size-adjust: 100%; }
+  #map { position: absolute; top: 0; left: 0; right: 0; bottom: 0; }
+
+  /* ===== ПАНЕЛЬ: увеличена верхняя зона, чтобы не резался текст под статус-баром ===== */
+  #panel {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 1000;
+    background: rgba(0,0,0,0.94); color: #fff;
+    padding: 14px 14px 12px;
+    padding-top: calc(44px + env(safe-area-inset-top, 0));   /* +44px под системный статус-бар */
+    font-size: 14px; line-height: 1.5;
+    max-height: 65vh; overflow: hidden;
+    border-bottom-left-radius: 16px; border-bottom-right-radius: 16px;
+    transition: transform 0.3s ease, max-height 0.3s ease;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.7);
+  }
+  #panel.collapsed {
+    transform: translateY(calc(-100% + 60px + env(safe-area-inset-top, 0)));
+    max-height: none;
+  }
+  #panel.collapsed .tabs, #panel.collapsed #list { display: none; }
+
+  #panel .header { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 40px; }
+  #panel .title { font-weight: 700; color: #ffcc00; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  #panel .btn {
+    background: rgba(255,255,255,0.22); color: #fff; border: none;
+    border-radius: 8px; padding: 8px 12px; font-size: 12px;
+    cursor: pointer; flex-shrink: 0; -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s;
+  }
+  #panel .btn:active { background: rgba(255,255,255,0.4); }
+  #panel .btn.spinning { animation: spin 1s linear infinite; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  #panel .meta { font-size: 12px; color: #bbb; margin-top: 8px; line-height: 1.6; }
+  #panel .tabs { display: flex; gap: 6px; margin-top: 10px; }
+  #panel .tab {
+    flex: 1; padding: 9px 6px; border-radius: 8px; font-size: 13px;
+    background: rgba(255,255,255,0.12); color: #eee;
+    border: none; cursor: pointer; -webkit-tap-highlight-color: transparent;
+    white-space: nowrap;
+  }
+  #panel .tab.active { background: #0088cc; color: #fff; font-weight: 600; }
+  #list { margin-top: 10px; max-height: calc(65vh - 180px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .row { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; font-size: 13px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; margin-top: 3px; box-shadow: 0 0 6px currentColor; }
+  .row-text { flex: 1; word-wrap: break-word; }
+  .row-title { font-weight: 700; }
+  .row-sub { color: #eee; font-size: 12px; }
+
+  .target-icon { display: flex; flex-direction: column; align-items: center; pointer-events: auto; }
+  .target-icon svg { display: block; }
+  .target-icon .label {
+    font-size: 11px; font-weight: 800; text-align: center;
+    white-space: nowrap; margin-top: -2px;
+    color: #fff !important;
+    text-shadow: 0 0 4px #000, 0 0 4px #000, 0 0 4px #000;
+    -webkit-text-stroke: 0.5px #000;
+  }
+  .target-icon.lost .svg-wrap { opacity: 0.45; filter: grayscale(0.7); }
+  .target-icon.lost .label   { opacity: 0.6; }
+
+  .event-icon { display: flex; flex-direction: column; align-items: center; pointer-events: auto; }
+  .event-icon .emoji { font-size: 24px; line-height: 1; filter: drop-shadow(0 0 5px rgba(0,0,0,1)) drop-shadow(0 0 2px #fff); }
+  .event-icon.archived .emoji { opacity: 0.5; filter: grayscale(0.8); }
+  .event-icon .label {
+    font-size: 10px; font-weight: 800; text-align: center;
+    white-space: nowrap; margin-top: -2px;
+    color: #fff !important;
+    text-shadow: 0 0 4px #000, 0 0 4px #000, 0 0 4px #000;
+    -webkit-text-stroke: 0.5px #000;
+  }
+
+  .leaflet-popup-content-wrapper { border-radius: 12px; background: #1a1a1a; color: #fff; }
+  .leaflet-popup-tip { background: #1a1a1a; }
+  .leaflet-popup-close-button { color: #fff !important; }
+
+  /* ===== КАРТОЧКА БПЛА ===== */
+  .drone-popup { font-size: 12px; max-height: 340px; overflow-y: auto; color: #fff; }
+  .drone-popup h3 { margin: 0 0 8px; font-size: 14px; color: #ffcc00; }
+  .drone-popup .stats { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin-bottom: 10px; font-size: 12px; }
+  .drone-popup .stats .k { color: #999; }
+  .drone-popup .stats .v { color: #fff; font-weight: 600; }
+  .drone-popup .status-active   { color: #4cd964; font-weight: 700; }
+  .drone-popup .status-shot     { color: #ff3b30; font-weight: 700; }
+  .drone-popup .status-impact   { color: #ff9500; font-weight: 700; }
+  .drone-popup .status-lost     { color: #999;    font-weight: 700; }
+  .drone-popup .status-left     { color: #30b0c7; font-weight: 700; }
+  .drone-popup .route-list { margin-top: 8px; border-top: 1px solid #333; padding-top: 6px; }
+  .drone-popup .route-list .step { padding: 5px 0; border-bottom: 1px solid #2a2a2a; display: flex; gap: 8px; }
+  .drone-popup .route-list .step:last-child { border-bottom: none; }
+  .drone-popup .route-list .t { color: #888; font-size: 11px; min-width: 40px; }
+  .drone-popup .route-list .p { color: #fff; flex: 1; }
+  .drone-popup .route-list .c { color: #aaa; font-size: 10px; }
+  .drone-popup .empty { color: #999; font-style: italic; }
+
+  .history-popup { font-size: 12px; max-height: 260px; overflow-y: auto; color: #fff; }
+  .history-popup .entry { border-bottom: 1px solid #333; padding: 7px 0; }
+  .history-popup .entry:last-child { border-bottom: none; }
+  .history-popup .time { color: #aaa; font-size: 11px; }
+  .history-popup .route { color: #fff; font-weight: 700; margin-top: 2px; }
+  .history-popup .src { color: #ccc; font-size: 11px; margin-top: 3px; font-style: italic; }
+  .history-popup .empty { color: #999; font-style: italic; }
+
+  #status {
+    position: absolute; bottom: calc(14px + env(safe-area-inset-bottom, 0));
+    left: 14px; right: 14px; z-index: 1000;
+    background: rgba(0,0,0,0.85); color: #fff;
+    padding: 10px 14px; border-radius: 10px; font-size: 12px;
+    text-align: center; pointer-events: none; opacity: 0; transition: opacity 0.3s;
+  }
+  #status.show { opacity: 1; }
+  #status.err { background: rgba(200,30,30,0.95); }
+</style>
+</head>
+<body>
+<div id="panel" class="collapsed">
+  <div class="header">
+    <div class="title" id="panelTitle">📡 Загрузка...</div>
+    <button class="btn" id="refreshBtn" title="Обновить">🔄</button>
+    <button class="btn" id="toggleBtn">Открыть</button>
+  </div>
+  <div class="meta" id="panelMeta">Обновляется…</div>
+  <div class="tabs" id="tabs">
+    <button class="tab active" data-tab="targets">🎯 Цели</button>
+    <button class="tab" data-tab="events">💥 События</button>
+    <button class="tab" data-tab="archive">📦 Архив</button>
+  </div>
+  <div id="list"></div>
+</div>
+<div id="map"></div>
+<div id="status"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.marker-motion@0.8.2/dist/leaflet.marker-motion.js"></script>
+<script>
+'use strict';
+
+// ============ КОНФИГ ============
+const PRIORITY_CHANNELS = [
+    'chyste_nebo',
+    'kyiv_nebo',
+    'airAlarm_Kyiv',
+    'kyiv_monitor1',
+    'kyiv_airdef',
+    'povitryana_rozvidka',
+    'Ukraine_UA_24_7',
+    'radar_raketaa',
+];
+const CHANNELS = [
+    'kievreal1',
+    'kiev_tryvoha',
+];
+
+const MESSAGES_TO_SCAN   = 25;
+const POLL_INTERVAL_MS   = 45_000;
+const FETCH_TIMEOUT_MS   = 9_000;
+const PARALLEL_WORKERS   = 3;
+const TARGET_RESET_MS    = 12 * 60 * 60 * 1000;   // 12 часов истории
+const TARGET_LOST_MS     = 10 * 60 * 1000;        // 10 минут без обновления = «потерян»
+const EVENT_ACTIVE_MS    = 60 * 60 * 1000;
+const EVENT_TTL_MS       = 24 * 60 * 60 * 1000;
+const MERGE_WINDOW_MS    = 5 * 60 * 1000;
+const MERGE_RADIUS_KM    = 60;
+const HISTORY_LIMIT      = 40;
+const DEDUP_DISTANCE_KM  = 2;
+const TIMEZONE           = 'Europe/Kyiv';
+
+const CORS_PROXIES = [
+    u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+    u => 'https://corsproxy.io/?url=' + encodeURIComponent(u),
+    u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u),
+    u => 'https://cors.eu.org/' + u,
+    u => 'https://api.allorigins.win/get?url=' + encodeURIComponent(u),
+];
+
+// ============ КАТЕГОРИИ ЦЕЛЕЙ ============
+const CATEGORIES = {
+    ballistic: { label: 'Баллистика', speedKmh: 1500, color: '#c04fff', altMin: 15000, altMax: 30000,
+                 words: ['кінжал','кинжал','іскандер','искандер','циркон','балістика','баллистика','с-300','с-400','с300','с400'] },
+    cruise:    { label: 'Крылатая',   speedKmh: 400,  color: '#ff2d2d', altMin: 30,   altMax: 1000,
+                 words: ['крилата','крылатая','калібр','калибр','х-101','х-555','kh-101','kh-555'] },
+    drone:     { label: 'БПЛА',       speedKmh: 80,   color: '#ff9500', altMin: 50,   altMax: 3000,
+                 words: ['герань','шахед','shahed','geran','гербера','бпла','дрон','камикадзе','ланцет','мопед'] },
+    jet_drone: { label: 'Реакт.БПЛА', speedKmh: 350,  color: '#ff6b00', altMin: 100,  altMax: 5000,
+                 words: ['реактивн'] },
+    unknown:   { label: 'НЛО',        speedKmh: 200,  color: '#00e5ff', altMin: 0,    altMax: 5000,
+                 words: [] },
+};
+
+function detectCategory(text) {
+    if (!text) return 'unknown';
+    const lower = text.toLowerCase();
+    const hasJet   = lower.includes('реактивн');
+    const hasDrone = ['шахед','герань','гербера','shahed','geran'].some(w => lower.includes(w));
+    if (hasJet && hasDrone) return 'jet_drone';
+    if (hasJet) return 'jet_drone';
+    for (const key of ['ballistic','cruise','drone']) {
+        for (const w of CATEGORIES[key].words) if (lower.includes(w)) return key;
+    }
+    return 'unknown';
+}
+
+// ============ КАТЕГОРИИ СОБЫТИЙ ============
+const EVENT_TYPES = {
+    impact:    { label: 'Прилёт',  emoji: '💥', color: '#ff3b30',
+                 words: ['приліт','прилет','влучання','впала','впав','упала','упав','влучив','влучила','пошкоджено','пошкоджена','пошкоджені','пошкоджений','руйнування'] },
+    fire:      { label: 'Пожар',   emoji: '🔥', color: '#ff9500',
+                 words: ['пожежа','пожежі','загоряння','займання','горить','горять','возгорання'] },
+    intercept: { label: 'Сбитие',  emoji: '🛡️', color: '#30b0c7',
+                 words: ['збито','збили','збиття','перехоплення','ппо працює','ппо спрацювала','збитий','збита','збиті'] },
+    debris:    { label: 'Обломки', emoji: '🔻', color: '#ffcc00',
+                 words: ['уламки','осколки','залишки','фрагменти'] },
+    explosion: { label: 'Взрыв',   emoji: '💣', color: '#e01e1e',
+                 words: ['вибух','взрыв','детонація'] },
+};
+
+function detectEventTypes(text) {
+    if (!text) return [];
+    const lower = text.toLowerCase();
+    const types = [];
+    for (const [key, def] of Object.entries(EVENT_TYPES)) {
+        for (const w of def.words) if (lower.includes(w)) { types.push(key); break; }
+    }
+    return types;
+}
+
+// ============ НОРМАЛИЗАЦИЯ ============
+function normalizeName(s) {
+    return String(s).toLowerCase()
+        .replace(/[ʼ'`']/g, '')
+        .replace(/ё/g, 'е')
+        .replace(/ґ/g, 'г')
+        .replace(/i/g, 'і');
+}
+
+// ============ СТЕММЕР ============
+const STEM_ENDINGS = [
+    'ському','ського','ський','ська','ське','ські',
+    'цькому','цького','цький','цька','цьке','цькі',
+    'ами','ями','ові','еві','єві','ому','ему','єму',
+    'ах','ях','ів','їв','ом','ем','єм','ою','ею','єю',
+    'ого','его','ої','ей','ой','ий','ій','їй',
+    'а','я','о','е','у','ю','и','і','ї','є','й','ь'
+];
+const STEM_MIN_WORD = 6, STEM_MIN_STEM = 4;
+const STEM_STOPWORDS = new Set([
+    'район','районі','району','районе','райони','районів',
+    'масив','масиві','масиву','місто','місті','міста',
+    'село','селі','села','селище','селищі','смт',
+    'обл','область','області','центр','центрі',
+    'києва','києві','києву','київ','киев','киеве','киева','киеву',
+]);
+function stemWord(w) {
+    if (!w || w.length < STEM_MIN_WORD) return w;
+    for (const e of STEM_ENDINGS) {
+        if (w.endsWith(e) && w.length - e.length >= STEM_MIN_STEM) return w.slice(0, w.length - e.length);
+    }
+    return w;
+}
+
+// ============ СЛОВАРИ ЛОКАЦИЙ (сокращённо, полный набор из предыдущей версии) ============
+const KYIV_DISTRICTS = [
+    { name: "Подільський район",     lat: 50.4900, lng: 30.4700, aliases: ["подільському","подільський","подольском","подольский"] },
+    { name: "Голосіївський район",   lat: 50.3900, lng: 30.5100, aliases: ["голосіївському","голосіївський","голосеевском","голосеевский"] },
+    { name: "Печерський район",      lat: 50.4270, lng: 30.5400, aliases: ["печерському","печерський","печерском","печерский"] },
+    { name: "Шевченківський район",  lat: 50.4500, lng: 30.5000, aliases: ["шевченківському","шевченківський","шевченковском","шевченковский"] },
+    { name: "Оболонський район",     lat: 50.5100, lng: 30.4900, aliases: ["оболонському","оболонський","оболонском","оболонский"] },
+    { name: "Дарницький район",      lat: 50.4000, lng: 30.6400, aliases: ["дарницькому","дарницький","дарницком","дарницкий"] },
+    { name: "Деснянський район",     lat: 50.5200, lng: 30.6100, aliases: ["деснянському","деснянський","деснянском","деснянский"] },
+    { name: "Дніпровський район",    lat: 50.4600, lng: 30.6100, aliases: ["дніпровському","дніпровський","днепровском","днепровский"] },
+    { name: "Солом'янський район",   lat: 50.4250, lng: 30.4400, aliases: ["солом'янському","солом'янський","соломенском","соломенский","соломянському"] },
+    { name: "Святошинський район",   lat: 50.4550, lng: 30.4000, aliases: ["святошинському","святошинський","святошинском","святошинский"] },
+];
+
+const KYIV_LOCATIONS = [
+    { name:"Поділ", lat:50.4650, lng:30.5150 },
+    { name:"Виноградар", lat:50.5100, lng:30.4350, aliases:["виноградарі","виноградаре","виноградарю"] },
+    { name:"Куренівка", lat:50.4850, lng:30.4850, aliases:["куренівці","куренівку","куренівки","куреньовка"] },
+    { name:"Почайна", lat:50.4880, lng:30.5000, aliases:["почайні","почайну"] },
+    { name:"Оболонь", lat:50.5100, lng:30.5000, aliases:["оболоні","оболонью"] },
+    { name:"Мінський масив", lat:50.5250, lng:30.4700, aliases:["мінському","минском","мінський"] },
+    { name:"Пріорка", lat:50.5050, lng:30.4900, aliases:["пріорці","приорке"] },
+    { name:"Голосіїв", lat:50.3960, lng:30.5100, aliases:["голосієво","голосеево","голосієві"] },
+    { name:"Теремки", lat:50.3700, lng:30.4580, aliases:["теремках","теремки-1","теремки-2","теремків"] },
+    { name:"Печерськ", lat:50.4250, lng:30.5450, aliases:["печерську","печерске","печерська","печерські"] },
+    { name:"Центр", lat:50.4470, lng:30.5230, aliases:["центрі","центре","центру"] },
+    { name:"Лук'янівка", lat:50.4620, lng:30.4800, aliases:["лук'янівці","лукьяновке","лукьянівка","лукʼянівка","лукʼянівці"] },
+    { name:"Нивки", lat:50.4580, lng:30.4150, aliases:["нивках","нивок"] },
+    { name:"Солом'янка", lat:50.4250, lng:30.4550, aliases:["солом'янці","соломянка","соломенка","соломянке"] },
+    { name:"Святошин", lat:50.4550, lng:30.4050, aliases:["святошині","святошино"] },
+    { name:"Троєщина", lat:50.5150, lng:30.6100, aliases:["троєщині","троещине","троєщини","троєщину"] },
+    { name:"Позняки", lat:50.4100, lng:30.6350, aliases:["позняках","позняків"] },
+    { name:"Осокорки", lat:50.3950, lng:30.6250, aliases:["осокорках","осокорків"] },
+    { name:"Дарниця", lat:50.4127, lng:30.6906 },
+    { name:"Харківський масив", lat:50.4100, lng:30.6500, aliases:["харківському","харьковском"] },
+    { name:"Русанівка", lat:50.4400, lng:30.6000, aliases:["русанівці","русановке"] },
+    { name:"Березняки", lat:50.4200, lng:30.6000, aliases:["березняках"] },
+    { name:"Лівобережний масив", lat:50.4550, lng:30.5950, aliases:["лівобережному","лівобережний","левобережном"] },
+    { name:"Троєщина", lat:50.5150, lng:30.6100 },
+    { name:"Вигурівщина", lat:50.5350, lng:30.6250, aliases:["вигурівщині"] },
+    { name:"Лісовий масив", lat:50.4850, lng:30.6350, aliases:["лісовому","лесном"] },
+    { name:"Биківня", lat:50.4900, lng:30.6800, aliases:["биківні"] },
+];
+
+const KYIV_SUBURBS = [
+    { name:"Борщагівка",                 lat:50.4235, lng:30.3876, aliases:["борщагівці","борщаговке"] },
+    { name:"Боярка",                     lat:50.3233, lng:30.3136, aliases:["боярці","боярку"] },
+    { name:"Вишневе",                    lat:50.3892, lng:30.3698, aliases:["вишневому","вишневое"] },
+    { name:"Ірпінь",                     lat:50.5218, lng:30.2506, aliases:["ірпені","ирпене"] },
+    { name:"Буча",                       lat:50.5434, lng:30.2120, aliases:["бучі","буче"] },
+    { name:"Гостомель",                  lat:50.5689, lng:30.2625, aliases:["гостомелі","гостомеле"] },
+    { name:"Вишгород",                   lat:50.5844, lng:30.4860, aliases:["вишгороді","вышгороде"] },
+    { name:"Нові Петрівці",              lat:50.6300, lng:30.4600, aliases:["нових петрівцях"] },
+    { name:"Бровари",                    lat:50.5110, lng:30.7900, aliases:["броварах","броварів"] },
+    { name:"Бориспіль",                  lat:50.3527, lng:30.9550, aliases:["борисполі","борисполе"] },
+    { name:"Київ",                       lat:50.4501, lng:30.5234, aliases:["києві","києва","київ","киев","киеве"] },
+    { name:"Біла Церква",                lat:49.7950, lng:30.1160, aliases:["білій церкві","белая церковь"] },
+    { name:"Васильків",                  lat:50.1810, lng:30.3120, aliases:["василькові","васильков"] },
+    { name:"Фастів",                     lat:50.0750, lng:29.9180, aliases:["фастові","фастов"] },
+    { name:"Обухів",                     lat:50.1066, lng:30.6244, aliases:["обухові","обухове"] },
+    { name:"Українка",                   lat:50.1467, lng:30.7400, aliases:["українці","украинке"] },
+];
+
+const KYIV_BRIDGES = [
+{name:"Мост Метро",aliases:["метромост"],lat:50.449,lng:30.573},
+{name:"Мост Патона",aliases:["Міст Патона"],lat:50.421,lng:30.587},
+{name:"Северный мост",aliases:["Московский мост","Північний міст"],lat:50.49097,lng:30.53674},
+{name:"Южный мост",aliases:["Південний міст"],lat:50.396,lng:30.582},
+{name:"Подольский мостовой переход",aliases:["Подольско-Воскресенский мост","ПВМП"],lat:50.475,lng:30.544},
+{name:"Дарницкий автомобильно-железнодорожный мост",aliases:["Дарницкий мост"],lat:50.421,lng:30.604},
+];
+
+const ENERGY_DB = [
+{name:"Київська ТЕЦ-5",aliases:["ТЕЦ-5","Киевская ТЭЦ-5"],lat:50.393,lng:30.569},
+{name:"Київська ТЕЦ-6",aliases:["ТЕЦ-6","Киевская ТЭЦ-6"],lat:50.532,lng:30.662},
+{name:"Дарницька ТЕЦ",aliases:["ТЕЦ-4","Дарницкая ТЭЦ"],lat:50.447,lng:30.640},
+{name:"Трипільська ТЕС",aliases:["Трипольская ТЭС"],lat:50.163,lng:30.746},
+{name:"Київська ГЕС",aliases:["Киевская ГЭС"],lat:50.584,lng:30.488},
+];
+
+const KYIV_SUBSTATIONS = [
+  ["ПС 750 кВ «Київська»",50.490836,29.688768],["ПС 330 кВ «Північна»",50.61313,30.38222],
+  ["ПС 330 кВ «Новокиївська»",50.380,30.470],["ПС 330 кВ «Нивки»",50.476,30.410],
+  ["ПС 330 кВ «Броварська»",50.538,30.899],["ПС 110 кВ «Пріорська»",50.509,30.424],
+  ["ПС 110 кВ «Біличі»",50.472,30.330],["ПС 110 кВ «Берковецька»",50.495,30.359],
+  ["ПС 110 кВ «Московська»",50.430,30.520],["ПС 110 кВ «Олімпійська»",50.433,30.520],
+  ["ПС 110 кВ «Осокорки»",50.395,30.620],["ПС 110 кВ «Поливка»",50.400,30.630],
+  ["ПС 110 кВ «Соломенська»",50.430,30.480],["ПС 110 кВ «Протеїнська»",50.425,30.500]
+];
+
+const PLACES_OLD = {
+  "чернігів":[51.500,31.290,"Чернігів"],"ніжин":[51.050,31.880,"Ніжин"],"прилуки":[50.590,32.380,"Прилуки"],
+  "суми":[50.910,34.800,"Суми"],"шустка":[51.870,33.470,"Шостка"],"конотоп":[51.240,33.200,"Конотоп"],
+  "харків":[49.990,36.230,"Харків"],"дніпро":[48.460,35.040,"Дніпро"],"запоріжжя":[47.840,35.140,"Запоріжжя"],
+  "одеса":[46.480,30.730,"Одеса"],"миколаїв":[46.970,32.000,"Миколаїв"],"херсон":[46.640,32.620,"Херсон"],
+  "львів":[49.840,24.030,"Львів"],"вінниця":[49.230,28.470,"Вінниця"],"полтава":[49.590,34.550,"Полтава"],
+  "черкаси":[49.440,32.060,"Черкаси"],"житомир":[50.250,28.660,"Житомир"],"рівне":[50.620,26.250,"Рівне"],
+  "луцьк":[50.750,25.340,"Луцьк"],"ужгород":[48.620,22.290,"Ужгород"],"воронеж":[51.670,39.180,"Воронеж"],
+  "ростов-на-дону":[47.240,39.700,"Ростов-на-Дону"],"курск":[51.730,36.190,"Курск"],"белгород":[50.600,36.590,"Белгород"],
+  "брянск":[53.250,34.370,"Брянск"],"орёл":[52.970,36.060,"Орёл"],"энгельс":[51.480,46.210,"Энгельс"],
+  "гомель":[52.440,30.990,"Гомель"],"припять":[51.400,30.050,"Припять"],"любеч":[51.420,30.720,"Любеч"]
+};
+
+const EXTRA_PLACES = {
+  "трипільськ[а-яіїєґ]*\\s*тес|трипольск[а-яіїєґ]*\\s*тэс":[50.13577,30.74499,"Трипільська ТЕС"],
+  "тец[-\\s]?5|тец[-\\s]?п'ять":[50.37885,30.57444,"ТЕЦ-5 (Видубичі)"],
+  "київська\\s*гес|киевская\\s*гэс":[50.60034,30.48642,"Київська ГЕС"],
+  "південний міст|южный мост":[50.3940,30.5870,"Південний міст"],
+  "видубичі":[50.4100,30.5630,"Видубичі"],
+  "рибальський\\s*острів":[50.4710,30.5320,"Рибальський острів"],
+  "каспійськ[а-яіїєґ]*\\s*море|каспийск[а-яіїєґ]*\\s*море":[42.0,51.0,"Каспійське море"],
+  "міллєрово|миллерово":[48.92,40.39,"Міллєрово"],
+  "чернігівщина|черниговщина":[51.5000,31.2900,"Чернігівщина"]
+};
+
+const REGIONS = [
+  {re:/курськ|курск/i,             name:"Курська обл.",      lat:51.73, lng:36.19},
+  {re:/брянськ|брянск/i,           name:"Брянська обл.",     lat:53.25, lng:34.37},
+  {re:/белгород|бєлгород/i,        name:"Бєлгородська обл.", lat:50.60, lng:36.59},
+  {re:/ростов/i,                   name:"Ростовська обл.",   lat:47.24, lng:39.70},
+  {re:/воронеж/i,                  name:"Воронезька обл.",   lat:51.67, lng:39.18},
+  {re:/крим|крым|севастопол|чорне\s+море|черное\s+море/i,name:"Крим / Чорне море",lat:45.00,lng:34.00},
+  {re:/чернігівськ|черниговск/i,   name:"Чернігівська обл.", lat:51.50, lng:31.29},
+  {re:/сумськ|сумск/i,             name:"Сумська обл.",      lat:50.91, lng:34.80},
+  {re:/київськ|киевск/i,           name:"Київська обл.",     lat:50.45, lng:30.52}
+];
+
+// ============ ПОСТРОЕНИЕ ИНДЕКСОВ ============
+const LOCATION_INDEX = {};
+const STEM_CANDIDATES = {};
+const STEM_INDEX = {};
+const REGEX_PLACES = [];
+
+function indexLocation(label, lat, lng, aliases) {
+    const coords = { lat, lng, label };
+    const keys = [label, ...(aliases || [])];
+    for (const raw of keys) {
+        if (!raw) continue;
+        const nk = normalizeName(raw);
+        if (!nk) continue;
+        if (!LOCATION_INDEX[nk]) LOCATION_INDEX[nk] = coords;
+        for (const w of nk.split(/\s+/)) {
+            if (w.length < STEM_MIN_WORD) continue;
+            if (STEM_STOPWORDS.has(w)) continue;
+            const st = stemWord(w);
+            if (st.length < STEM_MIN_STEM) continue;
+            if (!STEM_CANDIDATES[st]) STEM_CANDIDATES[st] = [];
+            if (!STEM_CANDIDATES[st].includes(coords)) STEM_CANDIDATES[st].push(coords);
+        }
+    }
+}
+
+for (const b of KYIV_BRIDGES)            indexLocation(b.name, b.lat, b.lng, b.aliases);
+for (const p of KYIV_LOCATIONS)          indexLocation(p.name, p.lat, p.lng, p.aliases);
+for (const d of KYIV_DISTRICTS)          indexLocation(d.name, d.lat, d.lng, d.aliases);
+for (const p of KYIV_SUBURBS)            indexLocation(p.name, p.lat, p.lng, p.aliases);
+for (const e of ENERGY_DB)               indexLocation(e.name, e.lat, e.lng, e.aliases);
+for (const s of KYIV_SUBSTATIONS)        indexLocation(s[0], s[1], s[2], []);
+for (const [k, v] of Object.entries(PLACES_OLD)) indexLocation(v[2], v[0], v[1], [k]);
+for (const [st, arr] of Object.entries(STEM_CANDIDATES)) if (arr.length === 1) STEM_INDEX[st] = arr[0];
+for (const [pat, [lat, lng, label]] of Object.entries(EXTRA_PLACES)) {
+    try { REGEX_PLACES.push({ re: new RegExp(pat, 'i'), lat, lng, label }); } catch (e) {}
+}
+
+// ============ УТИЛИТЫ ============
+function escapeRegex(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function formatTime(iso) {
+    try {
+        return new Date(iso).toLocaleString('ru-RU', {
+            timeZone: TIMEZONE, day: '2-digit', month: '2-digit',
+            hour: '2-digit', minute: '2-digit',
+        }).replace(',', '');
+    } catch (e) { return iso; }
+}
+function formatHHMMSS(d) {
+    try { return d.toLocaleTimeString('ru-RU', { timeZone: TIMEZONE, hour12: false }); }
+    catch (e) { return d.toISOString().slice(11,19); }
+}
+function showStatus(text, ms = 3000, isError = false) {
+    const el = document.getElementById('status');
+    el.textContent = text;
+    el.classList.toggle('err', isError);
+    el.classList.add('show');
+    clearTimeout(showStatus._t);
+    showStatus._t = setTimeout(() => el.classList.remove('show'), ms);
+}
+function distanceKm(a, b) {
+    const R = 6371;
+    const dLat = (b.lat - a.lat) * Math.PI / 180;
+    const dLng = (b.lng - a.lng) * Math.PI / 180;
+    const la1 = a.lat * Math.PI / 180, la2 = b.lat * Math.PI / 180;
+    const x = Math.sin(dLat/2)**2 + Math.sin(dLng/2)**2 * Math.cos(la1) * Math.cos(la2);
+    return 2 * R * Math.asin(Math.sqrt(x));
+}
+function bearing(from, to) {
+    const φ1 = from.lat * Math.PI / 180, φ2 = to.lat * Math.PI / 180;
+    const Δλ = (to.lng - from.lng) * Math.PI / 180;
+    const y = Math.sin(Δλ) * Math.cos(φ2);
+    const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+// ============ ПОИСК ЛОКАЦИЙ ============
+function findPlaces(text) {
+    if (!text) return [];
+    const norm = normalizeName(text);
+    const found = [];
+    const usedLabels = new Set();
+
+    const exactKeys = Object.keys(LOCATION_INDEX).sort((a,b) => b.length - a.length);
+    for (const key of exactKeys) {
+        const coords = LOCATION_INDEX[key];
+        if (usedLabels.has(coords.label)) continue;
+        const re = new RegExp(`(^|[^а-яіїєґa-z])${escapeRegex(key)}([^а-яіїєґa-z]|$)`, 'i');
+        const m = re.exec(norm);
+        if (m) {
+            usedLabels.add(coords.label);
+            found.push({ lat: coords.lat, lng: coords.lng, label: coords.label, matchType: 'exact', _pos: m.index });
+        }
+    }
+
+    const stemmedText = norm.replace(/[а-яіїєґa-z]+/gi, w => stemWord(w));
+    const stemKeys = Object.keys(STEM_INDEX).sort((a,b) => b.length - a.length);
+    for (const st of stemKeys) {
+        const coords = STEM_INDEX[st];
+        if (usedLabels.has(coords.label)) continue;
+        const re = new RegExp(`(^|[^а-яіїєґa-z])${escapeRegex(st)}([^а-яіїєґa-z]|$)`, 'i');
+        const m = re.exec(stemmedText);
+        if (m) {
+            usedLabels.add(coords.label);
+            found.push({ lat: coords.lat, lng: coords.lng, label: coords.label, matchType: 'stem', _pos: m.index });
+        }
+    }
+
+    for (const rp of REGEX_PLACES) {
+        if (usedLabels.has(rp.label)) continue;
+        const m = rp.re.exec(norm);
+        if (m) {
+            usedLabels.add(rp.label);
+            found.push({ lat: rp.lat, lng: rp.lng, label: rp.label, matchType: 'regex', _pos: m.index });
+        }
+    }
+
+    if (found.length === 0) {
+        for (const reg of REGIONS) {
+            const m = reg.re.exec(norm);
+            if (m) {
+                usedLabels.add(reg.name);
+                found.push({ lat: reg.lat, lng: reg.lng, label: reg.name, matchType: 'region', _pos: m.index });
+                break;
+            }
+        }
+    }
+
+    found.sort((a, b) => (a._pos || 0) - (b._pos || 0));
+    const result = [];
+    for (const p of found) {
+        let dup = false;
+        for (const r of result) if (distanceKm(p, r) < DEDUP_DISTANCE_KM) { dup = true; break; }
+        if (!dup) result.push(p);
+    }
+    return result;
+}
+
+// ============ ПАРСЕР ЦЕЛЕЙ ============
+const DRONE_ID_RE = /(?<![\p{L}\p{N}])(герань|шахед|shahed|geran|гербера)[\s\-–—]*(\d{1,4})(?!\p{N})/iu;
+
+function extractDroneId(text) {
+    if (!text) return null;
+    const m = text.match(DRONE_ID_RE);
+    if (m) {
+        const base = m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase();
+        return `${base}-${m[2]}`;
+    }
+    return null;
+}
+
+const MOVEMENT_PATTERNS = [
+    /(?:^|\s)(?:з|із|из|с|от|від)\s+[^,.!?]{2,60}?\s+(?:на|до|в|у|по|через)\s+/i,
+    /(?:курсом|прямує|прямують|летить|летять|рухається|рухаються|йде|йдуть|направляється|направляються|трима[єю]ть?\s+курс|взяв\s+курс|у\s+напрямку|в\s+напрямку|рушив|рушили|вилетів|вилетіли|заходить|заходять|зайшов|зайшли|вийшов|вийшли|наближається|наближаються|просувається|просуваються|залітає|залітають|пройшов|пройшли|входить|входять|увійшов|увійшли)\s+(?:на|до|в|у|по|через|над)\s+/i,
+    /(?:шахед|шахеди|герань|гербера|бпла|дрон|дрони|ракет[аиуы]|крилат[аоі]|баліст[иі]к[аиу]|ціль|цілі|група|групи)\s+(?:на|до|в|у|по|через|над)\s+/i,
+    /(?:курс|рух|напрямок|напрям)\s+[^,.!?]{0,25}?(?:на|до|в|у)\s+/i,
+    /(?:летить|пролітає|пролітають|рухається)\s+над\s+/i,
+];
+
+function hasMovement(text) {
+    if (!text) return false;
+    const norm = normalizeName(text);
+    return MOVEMENT_PATTERNS.some(re => re.test(norm));
+}
+
+function parseTarget(text) {
+    if (!text) return null;
+    const norm = normalizeName(text);
+    if (!hasMovement(norm)) return null;
+    const places = findPlaces(text);
+    if (places.length === 0) return null;
+
+    let fromPoint = null, toPoint = null;
+    const mFromTo = norm.match(/(?:^|\s)(?:з|із|из|с|от|від)\s+([^,.!?]{2,40}?)\s+(?:на|до|в|у|по|через)\s+([^,.!?]{2,40})/);
+    if (mFromTo) {
+        const fromText = mFromTo[1], toText = mFromTo[2];
+        for (const p of places) {
+            const lbl = normalizeName(p.label);
+            if (!fromPoint && fromText.includes(lbl)) fromPoint = p;
+            if (!toPoint   && toText.includes(lbl))   toPoint   = p;
+        }
+    }
+
+    let route = [], routeConfidence = 'low';
+    if (fromPoint && toPoint && fromPoint.label !== toPoint.label) {
+        route = [fromPoint, toPoint]; routeConfidence = 'high';
+    } else if (places.length === 1) {
+        route = [places[0]]; routeConfidence = 'medium';
+    } else if (places.length > 1) {
+        route = places.slice(0, 3); routeConfidence = 'low';
+    } else return null;
+
+    return {
+        category: detectCategory(text),
+        explicitId: extractDroneId(text),
+        route, fromPoint, routeConfidence,
+        sourceText: text,
+    };
+}
+
+// ============ ПАРСЕР СОБЫТИЙ ============
+function parseEvents(text) {
+    if (!text) return [];
+    const rawParts = text.split(/[▪️•●·\n;]+/).map(s => s.trim()).filter(s => s.length > 3);
+    const events = [];
+    for (const part of rawParts) {
+        const types = detectEventTypes(part);
+        if (types.length === 0) continue;
+        const places = findPlaces(part);
+        if (places.length === 0) continue;
+        const place = places[0];
+        for (const type of types) {
+            events.push({ type, lat: place.lat, lng: place.lng, place: place.label, sourceText: part });
+        }
+    }
+    return events;
+}
+
+// ============ ЗАГРУЗКА ============
+async function fetchChannelHtml(channel) {
+    const target = `https://t.me/s/${channel}`;
+    let lastErr = null;
+    for (let i = 0; i < CORS_PROXIES.length; i++) {
+        try {
+            const url = CORS_PROXIES[i](target);
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+            const r = await fetch(url, { signal: controller.signal });
+            clearTimeout(timeout);
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            let text = await r.text();
+            if (text.trim().startsWith('{')) {
+                try { const j = JSON.parse(text); if (j.contents) text = j.contents; } catch (e) {}
+            }
+            if (!text || text.length < 500) throw new Error('Пустой ответ');
+            if (!text.includes('tgme_widget_message')) throw new Error('Не HTML канала');
+            return text;
+        } catch (e) { lastErr = e; }
+    }
+    throw new Error('Все прокси недоступны: ' + (lastErr ? lastErr.message : '?'));
+}
+
+function parseChannelMessages(html) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const posts = doc.querySelectorAll('.tgme_widget_message_wrap');
+    const messages = [];
+    posts.forEach((post, i) => {
+        if (i < posts.length - MESSAGES_TO_SCAN) return;
+        const textEl = post.querySelector('.tgme_widget_message_text');
+        const timeEl = post.querySelector('.tgme_widget_message_date time');
+        const text = textEl ? textEl.innerText.trim() : '';
+        const time = timeEl ? timeEl.getAttribute('datetime') : null;
+        if (text) messages.push({ text, time });
+    });
+    return messages;
+}
+
+// ============ СОСТОЯНИЕ ============
+let state = {
+    targets: {}, events: [], lastPoll: null, lastError: null,
+    counters: {}, activeTab: 'targets',
+    lastSeenTime: {}, lastChannelOk: 0,
+};
+let history = {};
+
+function loadState() {
+    try {
+        const raw = localStorage.getItem('monitor_v11');
+        if (raw) state = Object.assign(state, JSON.parse(raw));
+        if (!state.targets)      state.targets = {};
+        if (!state.events)       state.events = [];
+        if (!state.counters)     state.counters = {};
+        if (!state.lastSeenTime) state.lastSeenTime = {};
+    } catch (e) {}
+}
+function saveState() { try { localStorage.setItem('monitor_v11', JSON.stringify(state)); } catch (e) {} }
+function loadHistory() {
+    try { const raw = localStorage.getItem('monitor_history_v11'); if (raw) history = JSON.parse(raw); }
+    catch (e) { history = {}; }
+}
+function saveHistory() { try { localStorage.setItem('monitor_history_v11', JSON.stringify(history)); } catch (e) {} }
+function appendHistory(id, entry) {
+    if (!history[id]) history[id] = [];
+    history[id].push(entry);
+    if (history[id].length > HISTORY_LIMIT) history[id] = history[id].slice(-HISTORY_LIMIT);
+    saveHistory();
+}
+
+function pruneTargets() {
+    const now = Date.now();
+    let changed = false;
+    for (const [id, t] of Object.entries(state.targets)) {
+        if (now - new Date(t.timestamp).getTime() > TARGET_RESET_MS) {
+            delete state.targets[id];
+            changed = true;
+        }
+    }
+    if (changed) saveState();
+}
+function pruneEvents() {
+    const now = Date.now();
+    const before = state.events.length;
+    state.events = state.events.filter(ev => now - new Date(ev.timestamp).getTime() < EVENT_TTL_MS);
+    if (state.events.length !== before) saveState();
+}
+function isEventActive(ev) {
+    return Date.now() - new Date(ev.timestamp).getTime() < EVENT_ACTIVE_MS;
+}
+
+// ====== ОПРЕДЕЛЕНИЕ СТАТУСА ЦЕЛИ ======
+function computeTargetStatus(t) {
+    if (t.status) return t.status;
+    const age = Date.now() - new Date(t.timestamp).getTime();
+    if (age > TARGET_LOST_MS) return 'lost';
+    return 'active';
+}
+
+function findTargetToMerge(route, category, fromPoint, timestamp) {
+    const now = new Date(timestamp).getTime();
+    if (fromPoint) {
+        for (const [id, t] of Object.entries(state.targets)) {
+            if (t.category !== category) continue;
+            const last = t.route[t.route.length - 1];
+            if (distanceKm(last, fromPoint) < 1.5) return id;
+        }
+    }
+    let best = null, bestDist = Infinity;
+    for (const [id, t] of Object.entries(state.targets)) {
+        if (t.category !== category) continue;
+        if (now - new Date(t.timestamp).getTime() > MERGE_WINDOW_MS) continue;
+        const last = t.route[t.route.length - 1];
+        const d = distanceKm(last, route[0]);
+        if (d < MERGE_RADIUS_KM && d < bestDist) { best = id; bestDist = d; }
+    }
+    return best;
+}
+function nextId(prefix) {
+    state.counters[prefix] = (state.counters[prefix] || 0) + 1;
+    return `${prefix}-${state.counters[prefix]}`;
+}
+function eventKey(ev) {
+    const lat = ev.lat.toFixed(3), lng = ev.lng.toFixed(3);
+    const min = Math.floor(new Date(ev.timestamp).getTime() / 60000);
+    const txt = (ev.sourceText || '').slice(0, 40).replace(/\s+/g, ' ');
+    return `${ev.type}|${lat}|${lng}|${min}|${txt}`;
+}
+function addEvent(ev, timestamp, channel) {
+    const key = eventKey({ ...ev, timestamp });
+    for (const existing of state.events) if (eventKey(existing) === key) return;
+    state.events.push({ ...ev, timestamp, channel, id: nextId('ev') });
+}
+
+// ====== ВЫЧИСЛЕНИЕ СКОРОСТИ И ВЫСОТЫ ======
+function estimateSpeedKmh(route) {
+    if (!route || route.length < 2) return null;
+    // Между двумя последними точками с известным временем
+    for (let i = route.length - 1; i > 0; i--) {
+        const a = route[i-1], b = route[i];
+        if (a._ts && b._ts) {
+            const dt = (new Date(b._ts).getTime() - new Date(a._ts).getTime()) / 3600000;
+            if (dt > 0.0001) {
+                const d = distanceKm(a, b);
+                const sp = Math.round(d / dt);
+                if (sp > 0 && sp < 3000) return sp;
+            }
+        }
+    }
+    return null;
+}
+function estimateAltitude(category) {
+    const cat = CATEGORIES[category] || CATEGORIES.unknown;
+    const mid = Math.round((cat.altMin + cat.altMax) / 2);
+    return { min: cat.altMin, max: cat.altMax, mid };
+}
+function formatAlt(m) {
+    if (m >= 1000) return (m/1000).toFixed(1) + ' км';
+    return m + ' м';
+}
+
+// ============ ОБРАБОТКА СООБЩЕНИЙ ============
+function processMessages(messages, channel) {
+    if (!messages || messages.length === 0) return;
+    const lastSeen = state.lastSeenTime[channel] || null;
+    let newestTime = lastSeen;
+
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        const timestamp = msg.time || new Date().toISOString();
+        if (lastSeen && msg.time && msg.time <= lastSeen) continue;
+        if (!newestTime || (msg.time && msg.time > newestTime)) newestTime = msg.time;
+
+        const target = parseTarget(msg.text);
+        if (target) {
+            let targetId = target.explicitId;
+            let existing = targetId ? state.targets[targetId] : null;
+            if (!existing) {
+                const mergedId = findTargetToMerge(target.route, target.category, target.fromPoint, timestamp);
+                if (mergedId) { targetId = mergedId; existing = state.targets[mergedId]; }
+            }
+            if (!targetId) targetId = nextId(target.category);
+
+            // Обогащаем точки таймстампом для расчёта скорости
+            const enrichedRoute = target.route.map(p => ({ ...p, _ts: timestamp }));
+
+            let newRoute;
+            if (existing && existing.route.length > 0) {
+                const lastOld = existing.route[existing.route.length - 1];
+                if (distanceKm(lastOld, enrichedRoute[0]) < 1.5) {
+                    newRoute = [...existing.route, ...enrichedRoute.slice(1)];
+                } else {
+                    newRoute = [...existing.route, ...enrichedRoute];
+                }
+            } else {
+                newRoute = enrichedRoute;
+            }
+
+            const unchanged = existing && existing.timestamp === timestamp && existing.route.length === newRoute.length;
+            if (!unchanged) {
+                state.targets[targetId] = {
+                    id: targetId, category: target.category,
+                    explicitId: target.explicitId || null,
+                    route: newRoute, timestamp,
+                    routeConfidence: target.routeConfidence,
+                    sourceText: target.sourceText, channel,
+                    status: 'active',
+                    firstSeen: existing?.firstSeen || timestamp,
+                };
+                appendHistory(targetId, {
+                    timestamp, category: target.category,
+                    route: newRoute, sourceText: target.sourceText, channel,
+                });
+            }
+        }
+
+        // События + статусы исчезновения
+        const events = parseEvents(msg.text);
+        for (const ev of events) {
+            addEvent(ev, timestamp, channel);
+
+            // Если событие в радиусе 3 км от цели — помечаем цель сбитой/прилёт
+            for (const [id, t] of Object.entries(state.targets)) {
+                const last = t.route[t.route.length - 1];
+                if (distanceKm(last, ev) < 3) {
+                    if (ev.type === 'intercept' && t.status !== 'shot') {
+                        t.status = 'shot';
+                        t.statusNote = 'Сбит (ПВО)';
+                        t.statusTs = timestamp;
+                    } else if (ev.type === 'impact' && t.status !== 'impact') {
+                        t.status = 'impact';
+                        t.statusNote = 'Прилёт (удар)';
+                        t.statusTs = timestamp;
+                    } else if (ev.type === 'debris' && t.status !== 'shot') {
+                        t.status = 'shot';
+                        t.statusNote = 'Обломки (после сбития)';
+                        t.statusTs = timestamp;
+                    }
+                }
+            }
+        }
+    }
+    if (newestTime && newestTime !== lastSeen) state.lastSeenTime[channel] = newestTime;
+}
+
+// ============ ОСНОВНОЙ ЦИКЛ ============
+let isPolling = false;
+async function pollAllChannels(manual = false) {
+    if (isPolling) { if (manual) showStatus('Уже обновляется...'); return; }
+    isPolling = true;
+    if (manual) showStatus('Обновление...', 2000);
+
+    const allChannels = [...PRIORITY_CHANNELS, ...CHANNELS];
+    const queue = allChannels.slice();
+    let fetchedCount = 0, lastErr = null;
+
+    const workers = Array.from({ length: PARALLEL_WORKERS }, async () => {
+        while (queue.length) {
+            const channel = queue.shift();
+            try {
+                const html = await fetchChannelHtml(channel);
+                const messages = parseChannelMessages(html);
+                processMessages(messages, channel);
+                fetchedCount++;
+            } catch (e) { lastErr = e.message; }
+        }
+    });
+    await Promise.all(workers);
+
+    // Обновляем статусы: если цель молчит > TARGET_LOST_MS → «потерян»
+    for (const t of Object.values(state.targets)) {
+        if (t.status === 'active') {
+            const age = Date.now() - new Date(t.timestamp).getTime();
+            if (age > TARGET_LOST_MS) t.status = 'lost';
+        }
+    }
+
+    if (fetchedCount > 0) { state.lastPoll = new Date().toISOString(); state.lastError = null; }
+    else { state.lastError = lastErr || 'Нет данных'; }
+    state.lastChannelOk = fetchedCount;
+    saveState();
+    pruneTargets();
+    pruneEvents();
+    renderAll();
+    updateMeta();
+    if (manual) {
+        if (fetchedCount > 0) showStatus(`✅ Обновлено (${fetchedCount}/${allChannels.length})`);
+        else showStatus('⚠️ Ни одного канала не удалось прочитать', 4000, true);
+    }
+    isPolling = false;
+}
+
+function updateMeta() {
+    const meta = document.getElementById('panelMeta');
+    if (state.lastError && !state.lastPoll) {
+        meta.textContent = '⚠️ ' + state.lastError;
+        meta.style.color = '#ff8888';
+        return;
+    }
+    if (!state.lastPoll) {
+        meta.textContent = 'Обновляется…';
+        meta.style.color = '#bbb';
+        return;
+    }
+    const d = new Date(state.lastPoll);
+    const hhmmss = formatHHMMSS(d);
+    const age = Date.now() - d.getTime();
+    if (age > 120_000) {
+        meta.textContent = `⚠️ Данные устарели (${hhmmss})`;
+        meta.style.color = '#ffaa44';
+    } else {
+        const chOk = state.lastChannelOk || 0;
+        const chTotal = PRIORITY_CHANNELS.length + CHANNELS.length;
+        meta.textContent = `Обновлено: ${hhmmss} · каналов ${chOk}/${chTotal}`;
+        meta.style.color = '#bbb';
+    }
+}
+
+// ============ КАРТА ============
+const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([50.4501, 30.5234], 11);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+function colorFor(cat) { return (CATEGORIES[cat] || CATEGORIES.unknown).color; }
+
+function makeTargetSvg(category, color) {
+    if (category === 'drone')
+        return `<svg width="34" height="34" viewBox="0 0 34 34"><polygon points="17,2 26,26 17,20 8,26" fill="${color}" stroke="#000" stroke-width="1.5"/></svg>`;
+    if (category === 'jet_drone')
+        return `<svg width="34" height="34" viewBox="0 0 34 34"><polygon points="17,2 26,26 17,20 8,26" fill="${color}" stroke="#000" stroke-width="1.5"/><circle cx="17" cy="14" r="2.2" fill="#fff" stroke="#000" stroke-width="0.5"/></svg>`;
+    if (category === 'cruise')
+        return `<svg width="34" height="34" viewBox="0 0 34 34"><polygon points="17,2 22,12 32,16 22,20 17,32 12,20 2,16 12,12" fill="${color}" stroke="#000" stroke-width="1.5"/></svg>`;
+    if (category === 'ballistic')
+        return `<svg width="34" height="34" viewBox="0 0 34 34"><polygon points="17,2 25,22 17,18 9,22" fill="${color}" stroke="#000" stroke-width="1.5"/><rect x="15" y="22" width="4" height="8" fill="${color}"/></svg>`;
+    return `<svg width="28" height="28" viewBox="0 0 28 28"><ellipse cx="14" cy="16" rx="13" ry="4.8" fill="${color}" stroke="#000" stroke-width="1"/><ellipse cx="14" cy="12.5" rx="7" ry="4" fill="${color}" stroke="#000" stroke-width="1" opacity="0.9"/><circle cx="7.5" cy="16" r="1.4" fill="#fff" stroke="#000" stroke-width="0.3"/><circle cx="14" cy="17" r="1.4" fill="#fff" stroke="#000" stroke-width="0.3"/><circle cx="20.5" cy="16" r="1.4" fill="#fff" stroke="#000" stroke-width="0.3"/></svg>`;
+}
+
+function makeTargetIcon(id, category, confidence, status) {
+    const color = colorFor(category);
+    const cat = CATEGORIES[category] || CATEGORIES.unknown;
+    const confMark = confidence === 'low' ? ' ~' : '';
+    const lostCls = (status === 'lost' || status === 'shot' || status === 'impact') ? ' lost' : '';
+
+    if (category === 'unknown') {
+        return L.divIcon({
+            className: 'target-icon' + lostCls,
+            html:
+                `<div style="position:relative;width:28px;height:38px;">` +
+                    `<div class="arrow-wrap" style="position:absolute;left:50%;top:-10px;transform:translateX(-50%) rotate(0deg);transform-origin:50% 100%;will-change:transform;">` +
+                        `<svg width="14" height="22" viewBox="0 0 14 22"><polygon points="7,0 13,14 9.5,14 9.5,22 4.5,22 4.5,14 1,14" fill="${color}" stroke="#000" stroke-width="1"/></svg>` +
+                    `</div>` +
+                    `<div class="svg-wrap" style="position:absolute;left:0;bottom:0;">${makeTargetSvg(category, color)}</div>` +
+                `</div>` +
+                `<div class="label">${escapeHtml(id)}${confMark}</div>`,
+            iconSize: [50, 64], iconAnchor: [25, 50]
+        });
+    }
+    return L.divIcon({
+        className: 'target-icon' + lostCls,
+        html:
+            `<div class="svg-wrap" style="transform: rotate(0deg); transform-origin: 50% 50%; will-change: transform;">${makeTargetSvg(category, color)}</div>` +
+            `<div class="label">${escapeHtml(id)}${confMark}<span style="font-size:9px;opacity:.9"> · ${cat.label}</span></div>`,
+        iconSize: [60, 56], iconAnchor: [30, 28]
+    });
+}
+
+function makeEventIcon(type, active) {
+    const def = EVENT_TYPES[type] || EVENT_TYPES.impact;
+    return L.divIcon({
+        className: 'event-icon' + (active ? '' : ' archived'),
+        html: `<div class="emoji">${def.emoji}</div><div class="label">${def.label}</div>`,
+        iconSize: [44, 44], iconAnchor: [22, 32]
+    });
+}
+
+function setIconRotation(marker, angleDeg) {
+    if (!marker || !marker.getElement) return;
+    const el = marker.getElement(); if (!el) return;
+    const wrap = el.querySelector('.svg-wrap');
+    if (wrap) wrap.style.transform = `rotate(${angleDeg}deg)`;
+}
+function setArrowRotation(marker, angleDeg) {
+    if (!marker || !marker.getElement) return;
+    const el = marker.getElement(); if (!el) return;
+    const wrap = el.querySelector('.arrow-wrap');
+    if (wrap) wrap.style.transform = `translateX(-50%) rotate(${angleDeg}deg)`;
+}
+function updateIconAngle(route, marker, category) {
+    if (!marker || !route || route.length < 2) {
+        if (category === 'unknown') setArrowRotation(marker, 0);
+        else setIconRotation(marker, 0);
+        return;
+    }
+    const from = route[route.length - 2], to = route[route.length - 1];
+    const angle = bearing(from, to);
+    if (category === 'unknown') setArrowRotation(marker, angle);
+    else setIconRotation(marker, angle);
+}
+
+const activeTargets = {}, activeEvents = {};
+
+// ====== КАРТОЧКА БПЛА С ИСТОРИЕЙ ======
+function openDroneCard(target, latlng) {
+    const cat = CATEGORIES[target.category] || CATEGORIES.unknown;
+    const status = computeTargetStatus(target);
+
+    let statusLabel, statusCls;
+    if (status === 'active')      { statusLabel = '🟢 Активна';         statusCls = 'status-active'; }
+    else if (status === 'shot')   { statusLabel = '🔴 Сбита (ПВО)';     statusCls = 'status-shot'; }
+    else if (status === 'impact') { statusLabel = '🟠 Прилёт';          statusCls = 'status-impact'; }
+    else                          { statusLabel = '⚫ Потеряна (тишина)'; statusCls = 'status-lost'; }
+
+    const spd = estimateSpeedKmh(target.route);
+    const alt = estimateAltitude(target.category);
+    const age = Math.round((Date.now() - new Date(target.timestamp).getTime()) / 60000);
+
+    // Скорость: расчётная или номинальная
+    const spdText = spd ? `${spd} км/ч <span style="color:#888">(расчётная)</span>`
+                        : `${cat.speedKmh} км/ч <span style="color:#888">(номинал)</span>`;
+
+    // Высота: диапазон + середина
+    const altText = `${formatAlt(alt.min)} – ${formatAlt(alt.max)} <span style="color:#888">(прибл.)</span>`;
+
+    // История точек
+    let routeHtml = '';
+    if (target.route && target.route.length > 0) {
+        routeHtml = target.route.map((p, i) => {
+            const ts = p._ts ? formatTime(p._ts) : '—';
+            const conf = i === 0 ? 'старт' : (i === target.route.length - 1 ? 'посл.' : `#${i}`);
+            return `<div class="step"><span class="t">${ts}</span><span class="p">${escapeHtml(p.label)}</span><span class="c">${conf}</span></div>`;
+        }).join('');
+    } else {
+        routeHtml = '<div class="empty">Нет точек</div>';
+    }
+
+    const firstSeen = target.firstSeen ? formatTime(target.firstSeen) : '—';
+    const lastSeen  = formatTime(target.timestamp);
+
+    const html = `
+        <div class="drone-popup">
+            <h3>🎯 ${escapeHtml(target.id)} <span style="font-size:11px;color:#888">· ${cat.label}</span></h3>
+            <div class="stats">
+                <span class="k">Статус:</span>      <span class="v ${statusCls}">${statusLabel}</span>
+                <span class="k">Скорость:</span>     <span class="v">${spdText}</span>
+                <span class="k">Высота:</span>       <span class="v">${altText}</span>
+                <span class="k">Обнаружен:</span>    <span class="v">${firstSeen}</span>
+                <span class="k">Последний раз:</span><span class="v">${lastSeen} <span style="color:#888">(${age} мин назад)</span></span>
+                <span class="k">Маршрут:</span>     <span class="v">${target.route.map(p => escapeHtml(p.label)).join(' → ')}</span>
+                <span class="k">Достоверность:</span><span class="v">${target.routeConfidence === 'high' ? 'высокая' : target.routeConfidence === 'medium' ? 'средняя' : 'низкая'}</span>
+            </div>
+            <div class="route-list">
+                <div style="color:#999;font-size:11px;margin-bottom:4px">📜 История полёта:</div>
+                ${routeHtml}
+            </div>
+            ${target.sourceText ? `<div style="color:#ccc;font-size:11px;margin-top:8px;font-style:italic">«${escapeHtml(target.sourceText.slice(0,200))}»</div>` : ''}
+        </div>
+    `;
+    L.popup({ maxWidth: 340, minWidth: 280, autoPan: true, maxHeight: 400 })
+        .setLatLng(latlng).setContent(html).openOn(map);
+}
+
+function openEventPopup(ev, latlng) {
+    const def = EVENT_TYPES[ev.type] || EVENT_TYPES.impact;
+    const html =
+        `<div class="history-popup">` +
+        `<div style="font-weight:700;margin-bottom:6px;color:${def.color}">${def.emoji} ${def.label}</div>` +
+        `<div class="time">${formatTime(ev.timestamp)} · ${escapeHtml(ev.place || '')}</div>` +
+        `<div class="src">«${escapeHtml(ev.sourceText || '')}»</div>` +
+        `</div>`;
+    L.popup({ maxWidth: 300, minWidth: 240, autoPan: true }).setLatLng(latlng).setContent(html).openOn(map);
+}
+
+function renderTarget(t) {
+    const existing = activeTargets[t.id];
+    if (existing && existing.lastTimestamp === t.timestamp && existing.lastRouteLength === t.route.length
+        && existing.lastStatus === t.status) return;
+    if (existing) {
+        if (existing.marker)   map.removeLayer(existing.marker);
+        if (existing.polyline) map.removeLayer(existing.polyline);
+        if (existing.arrow)    map.removeLayer(existing.arrow);
+        if (existing.angleTimer) clearInterval(existing.angleTimer);
+        delete activeTargets[t.id];
+    }
+    const points = t.route;
+    if (!points || points.length === 0) return;
+
+    const color = colorFor(t.category);
+    const cat = CATEGORIES[t.category] || CATEGORIES.unknown;
+    const status = computeTargetStatus(t);
+    const icon = makeTargetIcon(t.id, t.category, t.routeConfidence, status);
+    const lastPoint = points[points.length - 1];
+    const lastLatLng = [lastPoint.lat, lastPoint.lng];
+
+    let marker;
+    if (points.length === 1 || t.category === 'unknown' || status !== 'active') {
+        // Статичный маркер для завершённых/потерянных
+        marker = L.marker(lastLatLng, { icon, zIndexOffset: status === 'active' ? 1000 : 500 }).addTo(map);
+    } else {
+        const latlngs = points.map(p => [p.lat, p.lng]);
+        try {
+            marker = L.markerMotion(latlngs, cat.speedKmh, { icon, rotation: false, autoplay: true, loop: false }).addTo(map);
+        } catch (e) {
+            marker = L.marker(lastLatLng, { icon, zIndexOffset: 1000 }).addTo(map);
+        }
+    }
+    // Тап на иконку → карточка с историей, скоростью, высотой
+    marker.on('click', () => openDroneCard(t, marker.getLatLng()));
+    setTimeout(() => updateIconAngle(points, marker, t.category), 30);
+    if (marker.on) marker.on('motion.end', () => updateIconAngle(points, marker, t.category));
+    const angleTimer = setInterval(() => {
+        if (!map.hasLayer(marker)) { clearInterval(angleTimer); return; }
+        updateIconAngle(points, marker, t.category);
+    }, 400);
+
+    // Полилиния маршрута — для активных: красная пунктирная; для потерянных: серая
+    let polyline = null;
+    if (points.length > 1 && t.category !== 'unknown') {
+        const latlngs = points.map(p => [p.lat, p.lng]);
+        const isLost = status !== 'active';
+        polyline = L.polyline(latlngs, {
+            color: isLost ? '#888' : '#ff2d2d',
+            weight: 1.5,
+            dashArray: t.routeConfidence === 'low' ? '2,10' : '4,8',
+            opacity:   isLost ? 0.4 : (t.routeConfidence === 'low' ? 0.55 : 0.9),
+            interactive: false,
+        }).addTo(map);
+    }
+
+    let arrowMarker = null;
+    if (points.length > 1 && status === 'active') {
+        const prevPoint = points[points.length - 2];
+        const angle = bearing(prevPoint, lastPoint);
+        const arrowIcon = L.divIcon({
+            className: 'route-arrow',
+            html: `<div style="transform:rotate(${angle}deg);transform-origin:50% 50%;"><svg width="20" height="20" viewBox="0 0 20 20"><polygon points="10,0 16,16 10,12 4,16" fill="${color}" stroke="#000" stroke-width="1"/></svg></div>`,
+            iconSize: [20, 20], iconAnchor: [10, 10],
+        });
+        arrowMarker = L.marker(lastLatLng, { icon: arrowIcon, interactive: false, zIndexOffset: 999 }).addTo(map);
+    }
+
+    activeTargets[t.id] = {
+        marker, polyline, arrow: arrowMarker,
+        lastTimestamp: t.timestamp, lastRouteLength: points.length,
+        lastStatus: status, angleTimer,
+    };
+
+    if (Object.keys(activeTargets).length === 1) {
+        try {
+            if (polyline) map.fitBounds(polyline.getBounds(), { padding: [60, 60] });
+            else map.setView(lastLatLng, 12);
+        } catch (e) {}
+    }
+}
+
+function renderEvent(ev, forceShow) {
+    const active = isEventActive(ev);
+    if (!active && !forceShow) {
+        if (activeEvents[ev.id]) { map.removeLayer(activeEvents[ev.id]); delete activeEvents[ev.id]; }
+        return;
+    }
+    if (activeEvents[ev.id]) return;
+    const icon = makeEventIcon(ev.type, active);
+    const m = L.marker([ev.lat, ev.lng], { icon, opacity: active ? 1 : 0.6, zIndexOffset: active ? 500 : 0 }).addTo(map);
+    m.on('click', () => openEventPopup(ev, m.getLatLng()));
+    activeEvents[ev.id] = m;
+}
+
+function removeStaleTargets(currentIds) {
+    for (const id of Object.keys(activeTargets)) {
+        if (!currentIds.includes(id)) {
+            const t = activeTargets[id];
+            if (t.marker)   map.removeLayer(t.marker);
+            if (t.polyline) map.removeLayer(t.polyline);
+            if (t.arrow)    map.removeLayer(t.arrow);
+            if (t.angleTimer) clearInterval(t.angleTimer);
+            delete activeTargets[id];
+        }
+    }
+}
+
+function renderAll() {
+    const targets = Object.values(state.targets);
+    removeStaleTargets(targets.map(t => t.id));
+    for (const t of targets) renderTarget(t);
+    const forceShowArchive = state.activeTab === 'archive';
+    const evIds = new Set();
+    for (const ev of state.events) {
+        const active = isEventActive(ev);
+        if (active || forceShowArchive) { renderEvent(ev, forceShowArchive); evIds.add(ev.id); }
+    }
+    for (const id of Object.keys(activeEvents)) {
+        if (!evIds.has(id)) { map.removeLayer(activeEvents[id]); delete activeEvents[id]; }
+    }
+    updatePanel();
+}
+
+// ====== ПАНЕЛЬ СПИСКА ======
+function targetStatusBadge(t) {
+    const s = computeTargetStatus(t);
+    if (s === 'active') return '';
+    if (s === 'shot')   return ' <span style="color:#ff3b30;font-size:10px">[сбит]</span>';
+    if (s === 'impact') return ' <span style="color:#ff9500;font-size:10px">[прилёт]</span>';
+    if (s === 'lost')   return ' <span style="color:#888;font-size:10px">[потерян]</span>';
+    return '';
+}
+
+function updatePanel() {
+    const title = document.getElementById('panelTitle');
+    const list = document.getElementById('list');
+    const tab = state.activeTab;
+    if (tab === 'targets') {
+        const targets = Object.values(state.targets);
+        const active = targets.filter(t => computeTargetStatus(t) === 'active');
+        title.textContent = targets.length
+            ? `🎯 Цели: ${targets.length} (актив. ${active.length})`
+            : '🎯 Нет активных целей';
+        list.innerHTML = targets.slice().reverse().map(t => {
+            const color = colorFor(t.category);
+            const catLabel = (CATEGORIES[t.category] || CATEGORIES.unknown).label;
+            const routeStr = (t.route || []).map(p => escapeHtml(p.label)).join(' → ');
+            const conf = t.routeConfidence === 'low' ? ' ~' : '';
+            const spd = estimateSpeedKmh(t.route);
+            const spdStr = spd ? ` · ${spd} км/ч` : '';
+            const badge = targetStatusBadge(t);
+            return `<div class="row"><span class="dot" style="background:${color};color:${color}"></span>
+                <div class="row-text"><div class="row-title" style="color:${color}">${escapeHtml(t.id)}${conf} <span style="font-size:10px;opacity:.75;color:#fff">${catLabel}${spdStr}</span>${badge}</div>
+                <div class="row-sub">${routeStr}</div></div></div>`;
+        }).join('');
+    } else if (tab === 'events') {
+        const events = state.events.filter(isEventActive);
+        title.textContent = events.length ? `💥 События: ${events.length}` : '💥 Нет активных событий';
+        list.innerHTML = events.slice().reverse().map(ev => {
+            const def = EVENT_TYPES[ev.type] || EVENT_TYPES.impact;
+            return `<div class="row"><span class="dot" style="background:${def.color};color:${def.color}"></span>
+                <div class="row-text"><div class="row-title" style="color:${def.color}">${def.emoji} ${def.label}</div>
+                <div class="row-sub">${escapeHtml(ev.place || '')} · ${formatTime(ev.timestamp)}</div></div></div>`;
+        }).join('');
+    } else {
+        const archived = state.events.filter(ev => !isEventActive(ev));
+        title.textContent = `📦 Архив: ${archived.length}`;
+        list.innerHTML = archived.slice().reverse().map(ev => {
+            const def = EVENT_TYPES[ev.type] || EVENT_TYPES.impact;
+            return `<div class="row"><span class="dot" style="background:#666"></span>
+                <div class="row-text"><div class="row-title" style="color:#ccc">${def.emoji} ${def.label}</div>
+                <div class="row-sub">${escapeHtml(ev.place || '')} · ${formatTime(ev.timestamp)}</div></div></div>`;
+        }).join('');
+    }
+}
+
+// ============ UI ============
+const panel = document.getElementById('panel');
+const toggleBtn = document.getElementById('toggleBtn');
+const refreshBtn = document.getElementById('refreshBtn');
+
+toggleBtn.addEventListener('click', () => {
+    const collapsed = panel.classList.toggle('collapsed');
+    toggleBtn.textContent = collapsed ? 'Открыть' : 'Свернуть';
+});
+
+refreshBtn.addEventListener('click', () => {
+    refreshBtn.classList.add('spinning');
+    pollAllChannels(true).finally(() => {
+        setTimeout(() => refreshBtn.classList.remove('spinning'), 600);
+    });
+});
+
+document.getElementById('tabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('.tab');
+    if (!btn) return;
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    state.activeTab = btn.dataset.tab;
+    saveState();
+    renderAll();
+});
+
+// ============ СТАРТ ============
+loadState();
+loadHistory();
+renderAll();
+updateMeta();
+pollAllChannels(false);
+setInterval(() => pollAllChannels(false), POLL_INTERVAL_MS);
+setInterval(() => {
+    pruneTargets(); pruneEvents();
+    // Обновляем «потерянные» каждую минуту
+    for (const t of Object.values(state.targets)) {
+        if (t.status === 'active' && Date.now() - new Date(t.timestamp).getTime() > TARGET_LOST_MS) {
+            t.status = 'lost';
+        }
+    }
+    saveState();
+    renderAll();
+    updateMeta();
+}, 60_000);
+showStatus('Загрузка данных...');
+
+// Отладка
+window.__debugPlaces = (text) => findPlaces(text);
+window.__debugTarget = (text) => parseTarget(text);
+window.__state       = () => state;
+</script>
+</body>
+</html>
